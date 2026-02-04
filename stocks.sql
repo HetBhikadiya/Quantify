@@ -27,7 +27,7 @@ SET time_zone = "+00:00";
 -- Table structure for table `stocks`
 --
 
-CREATE TABLE `stocks` (
+CREATE TABLE IF NOT EXIST `stocks` (
   `Symbols` varchar(20) NOT NULL,
   `Company_names` varchar(100) DEFAULT NULL,
   `Category` varchar(30) NOT NULL,
