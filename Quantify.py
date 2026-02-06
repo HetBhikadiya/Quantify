@@ -2,12 +2,13 @@ import streamlit as st
 import pymysql
 import pandas as pd
 import matplotlib.pyplot as plt
-import plotly.graph_objects as go  # <--- NEW IMPORT
+import plotly.graph_objects as go 
 import random
 import re
 import bcrypt
 import yfinance as yf
 from datetime import datetime
+import pytz
 
 
 # ==========================================
@@ -26,6 +27,33 @@ def get_connection():
 # ==========================================
 def get_current_price(base):
     return round(base * (1 + random.uniform(-0.03, 0.03)), 2)
+
+def get_live_exchange_price(symbol):
+    """
+    Fetch LIVE NSE price from exchange
+    symbol: TCS, RELIANCE, INFY, ITC
+    """
+
+    try:
+        ticker = yf.Ticker(symbol + ".NS")
+
+        data = ticker.history(period="1d", interval="1m")
+
+        if data.empty:
+            return None, None
+
+        # Last traded price
+        ltp = round(data['Close'].iloc[-1], 2)
+
+        # Exchange timestamp
+        ist = pytz.timezone("Asia/Kolkata")
+        last_time = data.index[-1].tz_convert(ist)
+
+        return ltp, last_time.strftime("%I:%M:%S %p")
+
+    except Exception as e:
+        print("Live price error:", e)
+        return None, None
 
 def validate_email(email):
     return re.match(r'^[^@]+@[^@]+\.[^@]+$', email)
@@ -65,6 +93,7 @@ def fetch_stock_data(ticker):
         
         # Metadata
         info = stock.info
+        ticker=ticker[:-3]
         return {
             'symbol': ticker.upper(), # Keep original symbol for DB match
             'company_name': info.get('longName', ticker),
@@ -415,7 +444,18 @@ else:
             
             # Simulated Live Price (Fluctuation logic)
             base = stocks[stocks["symbol"] == stock]["today_open"].iloc[0]
-            price = get_current_price(base)
+            # price = get_current_price(base)
+            price, time_stamp = get_live_exchange_price(stock)
+
+            if price is None:
+                st.warning("📴 Live market data unavailable")
+                st.stop()
+            
+            st.metric(
+                "Live Exchange Price",
+                f"₹ {price}",
+                help=f"NSE • Last Updated: {time_stamp}"
+            )
             
             # Metrics
             st.metric("Live Price", f"₹ {price:,.2f}", delta=round(price - base, 2))
@@ -667,33 +707,6 @@ else:
             conn.commit()
             st.success("Funds added")
             st.rerun()
-# ==========================================
-    # MANAGE STOCKS (ADMIN/POWER USER)
-    # ==========================================
-    # elif menu == "Manage Stocks":
-    #     st.header("🛠️ Stock Inventory Management")
-    #     st.write("Add symbols or sync prices with real-time market open/previous close data.")
-
-        # --- Section 1: Add New Stock ---
-        with st.expander("➕ Add New Stock", expanded=True):
-            col1, col2 = st.columns([3, 1])
-            with col1:
-                new_ticker = st.text_input("Ticker Symbol", placeholder="e.g. AAPL, RELIANCE.NS, TSLA")
-                st.caption("Tip: Use '.NS' for Indian stocks (NSE).")
-            with col2:
-                st.write("##") 
-                if st.button("Add/Update Stock", use_container_width=True):
-                    if new_ticker:
-                        with st.spinner(f"Pulling data for {new_ticker}..."):
-                            # This calls the updated fetch function internally
-                            success = add_stock_to_db(new_ticker.upper(), conn)
-                            if success:
-                                st.success(f"Added/Updated {new_ticker.upper()} with today's open price.")
-                                st.rerun()
-                    else:
-                        st.warning("Please enter a ticker symbol.")
-
-        st.divider()
 
     # ==========================================
     # MANAGE STOCKS (ADMIN/POWER USER)
@@ -707,17 +720,20 @@ else:
             col1, col2 = st.columns([3, 1])
             with col1:
                 new_ticker = st.text_input("Ticker Symbol", placeholder="e.g. AAPL, RELIANCE.NS, TSLA")
-                st.caption("Tip: Use '.NS' for Indian stocks (NSE).")
             with col2:
                 st.write("##") 
                 if st.button("Add/Update Stock", use_container_width=True):
                     if new_ticker:
                         with st.spinner(f"Pulling data for {new_ticker}..."):
                             # This calls the updated fetch function internally
+                            new_ticker=new_ticker+'.NS'
                             success = add_stock_to_db(new_ticker.upper(), conn)
                             if success:
+                                
                                 st.success(f"Added/Updated {new_ticker.upper()} with today's open price.")
                                 st.rerun()
+                            else:
+                                st.warning("Enter Appropriate Stock")
                     else:
                         st.warning("Please enter a ticker symbol.")
 
