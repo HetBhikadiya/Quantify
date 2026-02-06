@@ -1,5 +1,3 @@
-
-6
 import pymysql
 
 print("1. Python is running.")

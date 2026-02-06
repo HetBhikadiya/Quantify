@@ -25,25 +25,30 @@ def get_connection():
 # ==========================================
 # HELPER FUNCTIONS
 # ==========================================
-def get_current_price(base):
-    return round(base * (1 + random.uniform(-0.03, 0.03)), 2)
 
 def get_live_exchange_price(symbol):
     """
     Fetch LIVE NSE price from exchange
     symbol: TCS, RELIANCE, INFY, ITC
     """
-
     try:
-        ticker = yf.Ticker(symbol + ".NS")
+        # Auto-handle suffix if missing
+        ticker_sym = symbol if "." in symbol else f"{symbol}.NS"
+        ticker = yf.Ticker(ticker_sym)
 
+        # Get the latest 1-minute interval data
         data = ticker.history(period="1d", interval="1m")
 
         if data.empty:
             return None, None
 
-        # Last traded price
-        ltp = round(data['Close'].iloc[-1], 2)
+        # Extract Last Traded Price as a float
+        ltp_val = data['Close'].iloc[-1]
+        
+        if pd.isna(ltp_val):
+            return None, None
+            
+        ltp = float(round(ltp_val, 2))
 
         # Exchange timestamp
         ist = pytz.timezone("Asia/Kolkata")
@@ -52,7 +57,7 @@ def get_live_exchange_price(symbol):
         return ltp, last_time.strftime("%I:%M:%S %p")
 
     except Exception as e:
-        print("Live price error:", e)
+        print(f"Live price error for {symbol}: {e}")
         return None, None
 
 def validate_email(email):
@@ -166,7 +171,10 @@ def process_pending_orders(conn):
     """, conn)
 
     for _, o in orders.iterrows():
-        current_price = get_current_price(o["price"])
+        # Get REAL market price for the pending order symbol
+        current_price, _ = get_live_exchange_price(o["symbol"])
+        if current_price is None: 
+            continue
 
         execute = (
             (o["order_type"] == "LIMIT BUY" and current_price <= o["trigger_price"]) or
@@ -232,17 +240,6 @@ def get_intraday_data(symbol):
     except Exception as e:
         print(f"Error fetching chart data: {e}")
         return None
-
-
-def get_live_price(sym, fallback):
-    """Fetch current market price safely"""
-    try:
-        ticker = sym if sym.endswith(".NS") else f"{sym}.NS"
-        t = yf.Ticker(ticker)
-        price = t.history(period="1d")['Close'].iloc[-1]
-        return round(float(price), 2)
-    except Exception:
-        return fallback
 
 # ==========================================
 # STREAMLIT CONFIG
@@ -440,7 +437,6 @@ else:
             
             # Simulated Live Price (Fluctuation logic)
             base = stocks[stocks["symbol"] == stock]["today_open"].iloc[0]
-            # price = get_current_price(base)
             price, time_stamp = get_live_exchange_price(stock)
 
             if price is None:
@@ -562,19 +558,15 @@ else:
             except:
                 st.warning("Already in watchlist")
 
-        wl = pd.read_sql("""
+        wl_data = pd.read_sql("""
             SELECT w.symbol, s.today_open
             FROM watchlist w JOIN stocks s ON w.symbol=s.symbol
             WHERE w.email=%s
         """, conn, params=(st.session_state["user_email"],))
 
-        if not wl.empty:
-            wl["Live Price"] = wl.apply(
-                lambda row: get_live_price(row["symbol"], row["today_open"]),
-                axis=1
-            )
-
-            st.dataframe(wl[["symbol", "Live Price"]], use_container_width=True)
+        if not wl_data.empty:
+            wl_data['Live Price'] = wl_data['symbol'].apply(lambda x: get_live_exchange_price(x)[0])
+            st.dataframe(wl_data, use_container_width=True)
 
     # ==========================================
     # PORTFOLIO
@@ -594,60 +586,61 @@ else:
         """, conn, params=(st.session_state["user_email"],))
 
         if not df.empty:
-            # Get Live Prices
-            stocks = pd.read_sql("SELECT symbol, today_open FROM stocks", conn)
-            df = df.merge(stocks, on="symbol")
-            
-            # Apply Fluctuation to make it feel live
-            df["Current Price"] = df.apply(
-                lambda row: get_live_price(row["symbol"], row["today_open"]),
-                axis=1
-            )
+            with st.spinner("Fetching real-time market valuations..."):
 
-            df["Current Value"] = df["Current Price"] * df["qty"]
-            df["P/L"] = df["Current Value"] - df["invested"]
-            df["P/L %"] = (df["P/L"] / df["invested"] * 100).round(2)
-            
-            # Summary Metrics
-            total_invested = df["invested"].sum()
-            current_value = df["Current Value"].sum()
-            total_pl = current_value - total_invested
-            
-            m1, m2, m3 = st.columns(3)
-            m1.metric("Total Invested", f"₹ {total_invested:,.2f}")
-            m2.metric("Current Value", f"₹ {current_value:,.2f}", delta=f"{total_pl:,.2f}")
-            m3.metric("Total P/L", f"₹ {total_pl:,.2f}")
-            
-            st.divider()
+                # We use .apply with a lambda to fetch the price for each symbol
+                df["Current Price"] = df["symbol"].apply(
+                    lambda sym: get_live_exchange_price(sym)[0]
+                )
 
-            col_charts1, col_charts2 = st.columns(2)
-            
-            # Chart 1: Asset Allocation (Pie Chart)
-            with col_charts1:
-                st.subheader("Asset Allocation")
-                fig_pie = go.Figure(data=[go.Pie(labels=df['symbol'], values=df['Current Value'], hole=.4)])
-                fig_pie.update_layout(height=350, margin=dict(t=0, b=0, l=0, r=0))
-                st.plotly_chart(fig_pie, use_container_width=True)
+                # Filter out any stocks where the price couldn't be fetched (None)
+                df = df.dropna(subset=["Current Price"])
 
-            # Chart 2: Profit/Loss per Stock (Bar Chart)
-            with col_charts2:
-                st.subheader("Stock-wise P/L")
-                colors = ['green' if val >= 0 else 'red' for val in df['P/L']]
-                fig_bar = go.Figure(data=[go.Bar(
-                    x=df['symbol'],
-                    y=df['P/L'],
-                    marker_color=colors
-                )])
-                fig_bar.update_layout(height=350, margin=dict(t=0, b=0, l=0, r=0))
-                st.plotly_chart(fig_bar, use_container_width=True)
+                # Mathematical calculations using float prices
+                df["Current Value"] = df["Current Price"] * df["qty"]
+                df["P/L"] = df["Current Value"] - df["invested"]
+                df["P/L %"] = (df["P/L"] / df["invested"] * 100).round(2)
+                
+                # Summary Metrics
+                total_invested = df["invested"].sum()
+                current_value = df["Current Value"].sum()
+                total_pl = current_value - total_invested
+                
+                m1, m2, m3 = st.columns(3)
+                m1.metric("Total Invested", f"₹ {total_invested:,.2f}")
+                m2.metric("Current Value", f"₹ {current_value:,.2f}", delta=f"₹{total_pl:,.2f}")
+                m3.metric("Total P/L", f"₹ {total_pl:,.2f}")
+                
+                st.divider()
 
-            # Detailed Table
-            st.subheader("Holdings Details")
-            st.dataframe(
-                df[["symbol", "qty", "invested", "Current Price", "Current Value", "P/L", "P/L %"]], 
-                use_container_width=True,
-                hide_index=True
-            )
+                col_charts1, col_charts2 = st.columns(2)
+                
+                # Chart 1: Asset Allocation (Pie Chart)
+                with col_charts1:
+                    st.subheader("Asset Allocation")
+                    fig_pie = go.Figure(data=[go.Pie(labels=df['symbol'], values=df['Current Value'], hole=.4)])
+                    fig_pie.update_layout(height=350, margin=dict(t=0, b=0, l=0, r=0))
+                    st.plotly_chart(fig_pie, use_container_width=True)
+
+                # Chart 2: Profit/Loss per Stock (Bar Chart)
+                with col_charts2:
+                    st.subheader("Stock-wise P/L")
+                    colors = ['#2ecc71' if val >= 0 else '#e74c3c' for val in df['P/L']]
+                    fig_bar = go.Figure(data=[go.Bar(
+                        x=df['symbol'],
+                        y=df['P/L'],
+                        marker_color=colors
+                    )])
+                    fig_bar.update_layout(height=350, margin=dict(t=0, b=0, l=0, r=0))
+                    st.plotly_chart(fig_bar, use_container_width=True)
+
+                # Detailed Table
+                st.subheader("Holdings Details")
+                st.dataframe(
+                    df[["symbol", "qty", "invested", "Current Price", "Current Value", "P/L", "P/L %"]], 
+                    use_container_width=True,
+                    hide_index=True
+                )
         else:
             st.info("You don't own any stocks yet. Go to 'Live Market' to buy some!")
 
@@ -670,6 +663,10 @@ else:
         stocks = pd.read_sql("SELECT symbol, today_open FROM stocks", conn)
         tx = pd.read_sql("SELECT email, symbol, qty, action FROM transactions", conn)
 
+        # Optimize: Fetch each stock price only once
+        unique_stocks = tx['symbol'].unique()
+        live_prices = {s: get_live_exchange_price(s)[0] for s in unique_stocks}
+        
         leaderboard = []
 
         for _, u in users.iterrows():
@@ -682,8 +679,9 @@ else:
                 ).sum()
 
                 if qty > 0:
-                    base = stocks[stocks["symbol"] == sym]["today_open"].iloc[0]
-                    portfolio_value += get_current_price(base) * qty
+                    current_price = live_prices.get(sym)
+                    if current_price:
+                        portfolio_value += (current_price * qty)
 
             leaderboard.append({"User": u["username"], "Portfolio Value": portfolio_value})
 
