@@ -1,45 +1,8 @@
--- phpMyAdmin SQL Dump
--- version 5.2.1
--- https://www.phpmyadmin.net/
---
--- Host: 127.0.0.1
--- Generation Time: Jan 02, 2026 at 05:22 PM
--- Server version: 10.4.32-MariaDB
--- PHP Version: 8.0.30
-
 SET SQL_MODE = "NO_AUTO_VALUE_ON_ZERO";
 START TRANSACTION;
 SET time_zone = "+00:00";
 
-
-/*!40101 SET @OLD_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT */;
-/*!40101 SET @OLD_CHARACTER_SET_RESULTS=@@CHARACTER_SET_RESULTS */;
-/*!40101 SET @OLD_COLLATION_CONNECTION=@@COLLATION_CONNECTION */;
-/*!40101 SET NAMES utf8mb4 */;
-
---
--- Database: `trading_app`
---
-
--- --------------------------------------------------------
-
---
--- Table structure for table `stocks`
---
-
-CREATE TABLE IF NOT EXIST `stocks` (
-  `Symbols` varchar(20) NOT NULL,
-  `Company_names` varchar(100) DEFAULT NULL,
-  `Category` varchar(30) NOT NULL,
-  `Previous_ClosePrice` double DEFAULT NULL,
-  `Today_OpenPrice` double DEFAULT NULL
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
-
---
--- Dumping data for table `stocks`
---
-
-INSERT INTO `stocks` (`Symbols`, `Company_names`, `Category`, `Previous_ClosePrice`, `Today_OpenPrice`) VALUES
+INSERT INTO `stocks` (`symbol`, `company_names`, `category`, `prev_close`, `today_open`) VALUES
 ('ADANIENT', 'Adani Enterprises', 'Energy', 2975, 2995),
 ('ADANIGREEN', 'Adani Green Energy', 'Energy', 1020, 1035),
 ('ADANIPORTS', 'Adani Ports', 'Infra & Materials', 1225, 1230),
@@ -54,8 +17,6 @@ INSERT INTO `stocks` (`Symbols`, `Company_names`, `Category`, `Previous_ClosePri
 ('BRITANNIA', 'Britannia Industries', 'FMCG', 5100, 5150),
 ('CIPLA', 'Cipla Ltd.', 'Pharma', 1350, 1365),
 ('COALINDIA', 'Coal India', 'Energy', 460, 462),
-('DIVISLAB', 'Divi\'s Laboratories', 'Pharma', 4150, 4170),
-('DRREDDY', 'Dr. Reddy\'s Laboratories', 'Pharma', 5980, 6025),
 ('EICHERMOT', 'Eicher Motors', 'Automobile', 4050, 4080),
 ('GRASIM', 'Grasim Industries', 'Infra & Materials', 2100, 2120),
 ('HCLTECH', 'HCL Technologies', 'IT', 1230.3, 1235),
@@ -92,17 +53,7 @@ INSERT INTO `stocks` (`Symbols`, `Company_names`, `Category`, `Previous_ClosePri
 ('ULTRACEMCO', 'UltraTech Cement', 'Infra & Materials', 9300, 9355),
 ('WIPRO', 'Wipro Ltd.', 'IT', 423.55, 425.2);
 
---
--- Indexes for dumped tables
---
 
---
--- Indexes for table `stocks`
---
 ALTER TABLE `stocks`
   ADD PRIMARY KEY (`Symbols`);
 COMMIT;
-
-/*!40101 SET CHARACTER_SET_CLIENT=@OLD_CHARACTER_SET_CLIENT */;
-/*!40101 SET CHARACTER_SET_RESULTS=@OLD_CHARACTER_SET_RESULTS */;
-/*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;

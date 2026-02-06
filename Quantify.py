@@ -2,11 +2,13 @@ import streamlit as st
 import pymysql
 import pandas as pd
 import matplotlib.pyplot as plt
+import plotly.graph_objects as go  # <--- NEW IMPORT
 import random
 import re
 import bcrypt
 import yfinance as yf
 from datetime import datetime
+
 
 # ==========================================
 # DATABASE CONFIG
@@ -160,6 +162,59 @@ def process_pending_orders(conn):
             """, (current_price, o["id"]))
 
             conn.commit()
+# ==========================================
+# RELIABLE YFINANCE HELPERS (FIX FOR CHARTS)
+# ==========================================
+def get_intraday_data(symbol):
+    """
+    Fetch reliable intraday data. 
+    Fix: Fetches 5 days of data and filters for the last available day 
+    to ensure charts work even when the market is closed.
+    """
+    try:
+        # Handle Ticker Suffix safely
+        ticker = symbol
+        if "." not in ticker:
+            ticker = f"{symbol}.NS" # Default to NSE if no suffix
+
+        stock = yf.Ticker(ticker)
+
+        # FETCH 5 DAYS instead of 1 day to handle weekends/holidays
+        df = stock.history(period="5d", interval="5m")
+
+        if df.empty:
+            return None
+
+        # Reset index to access Datetime column
+        df.reset_index(inplace=True)
+
+        # Standardize column name (yfinance sometimes uses 'Date', sometimes 'Datetime')
+        if 'Date' in df.columns:
+            df = df.rename(columns={'Date': 'Datetime'})
+
+        # Filter: Keep only the data for the LAST available date
+        # This creates a "One Day" view regardless of whether it is today or last Friday
+        df['JustDate'] = df['Datetime'].dt.date
+        last_trading_day = df['JustDate'].max()
+        final_df = df[df['JustDate'] == last_trading_day]
+
+        return final_df
+
+    except Exception as e:
+        print(f"Error fetching chart data: {e}")
+        return None
+
+
+def get_live_price(sym, fallback):
+    """Fetch current market price safely"""
+    try:
+        ticker = sym if sym.endswith(".NS") else f"{sym}.NS"
+        t = yf.Ticker(ticker)
+        price = t.history(period="1d")['Close'].iloc[-1]
+        return round(float(price), 2)
+    except Exception:
+        return fallback
+
 # ==========================================
 # STREAMLIT CONFIG
 # ==========================================
@@ -345,78 +400,115 @@ else:
     # LIVE MARKET & TRADE
     # ==========================================
     elif menu == "Live Market & Trade":
+        st.header("📈 Live Trading Terminal")
+        
+        # 1. Stock Selection
         stocks = pd.read_sql("SELECT symbol, today_open FROM stocks", conn)
-        stock = st.selectbox("Select Stock", stocks["symbol"])
+        if stocks.empty:
+            st.warning("No stocks found. Go to 'Manage Stocks' to add some.")
+            st.stop()
+            
+        col_list, col_chart = st.columns([1, 2])
+        
+        with col_list:
+            stock = st.selectbox("Select Stock", stocks["symbol"])
+            
+            # Simulated Live Price (Fluctuation logic)
+            base = stocks[stocks["symbol"] == stock]["today_open"].iloc[0]
+            price = get_current_price(base)
+            
+            # Metrics
+            st.metric("Live Price", f"₹ {price:,.2f}", delta=round(price - base, 2))
+            
+            st.divider()
+            
+            # Trading Panel
+            qty = st.number_input("Quantity", min_value=1, value=1)
+            action = st.radio("Action", ["BUY", "SELL"], horizontal=True)
+            order_type = st.selectbox("Order Type", ["MARKET", "LIMIT BUY", "LIMIT SELL", "STOP-LOSS"])
+            
+            trigger_price = None
+            if order_type != "MARKET":
+                trigger_price = st.number_input("Trigger Price (₹)", min_value=0.1, value=float(price))
+            
+            total = price * qty
+            st.write(f"**Total Value:** ₹ {total:,.2f}")
 
-        base = stocks[stocks["symbol"] == stock]["today_open"].iloc[0]
-        price = get_current_price(base)
-
-        st.metric("Current Price", f"₹ {price}")
-
-        qty = st.number_input("Quantity", min_value=1)
-        action = st.radio("Action", ["BUY", "SELL"])
-        order_type = st.selectbox("Order Type", ["MARKET", "LIMIT BUY", "LIMIT SELL", "STOP-LOSS"])
-
-        trigger_price = None
-        if order_type != "MARKET":
-            trigger_price = st.number_input("Trigger Price", min_value=1.0)
-
-        total = price * qty
-
-        c.execute("SELECT balance FROM users WHERE email=%s", (st.session_state["user_email"],))
-        balance = c.fetchone()[0]
-
-        if st.button("Confirm Order"):
-            if order_type == "MARKET":
-                if action == "BUY":
-                    if balance >= total:
-                        # 1. Deduct balance from DB
-                        c.execute("UPDATE users SET balance=balance-%s WHERE email=%s", 
-                                 (total, st.session_state["user_email"]))
-                        
-                        # 2. Record Transaction
-                        c.execute("""
-                            INSERT INTO transactions (email, symbol, qty, price, action, order_type)
-                            VALUES (%s, %s, %s, %s, 'BUY', 'MARKET')
-                        """, (st.session_state["user_email"], stock, qty, price))
-                             
-                        conn.commit()
-                        st.success(f"Market Buy Executed! ₹{total:,.2f} deducted.")
-                        st.rerun()
-                    else:
-                        # --- INSUFFICIENT BALANCE LOGIC ---
-                        st.error(f"Insufficient Balance! You need ₹{total - balance:,.2f} more.")
-                        if st.button("Add Funds"):
-                            st.session_state.menu_choice = "Add Funds"
+            # Buttons
+            if st.button("Confirm Order", use_container_width=True):
+                # ... (Existing Order Logic - Copy your previous logic here or use the simplified version below) ...
+                c.execute("SELECT balance FROM users WHERE email=%s", (st.session_state["user_email"],))
+                balance = c.fetchone()[0]
+                
+                if order_type == "MARKET":
+                    if action == "BUY":
+                        if balance >= total:
+                            c.execute("UPDATE users SET balance=balance-%s WHERE email=%s", (total, st.session_state["user_email"]))
+                            c.execute("INSERT INTO transactions (email, symbol, qty, price, action, order_type) VALUES (%s, %s, %s, %s, 'BUY', 'MARKET')", 
+                                      (st.session_state["user_email"], stock, qty, price))
+                            conn.commit()
+                            st.success(f"Bought {qty} {stock}!")
                             st.rerun()
+                        else:
+                            st.error(f"Insufficient Funds. Need ₹{total-balance:,.2f} more.")
+                    
+                    elif action == "SELL":
+                        c.execute("SELECT COALESCE(SUM(CASE WHEN action='BUY' THEN qty ELSE -qty END),0) FROM transactions WHERE email=%s AND symbol=%s", 
+                                  (st.session_state["user_email"], stock))
+                        holding = c.fetchone()[0]
+                        if holding >= qty:
+                            c.execute("UPDATE users SET balance=balance+%s WHERE email=%s", (total, st.session_state["user_email"]))
+                            c.execute("INSERT INTO transactions (email, symbol, qty, price, action, order_type) VALUES (%s, %s, %s, %s, 'SELL', 'MARKET')", 
+                                      (st.session_state["user_email"], stock, qty, price))
+                            conn.commit()
+                            st.success(f"Sold {qty} {stock}!")
+                            st.rerun()
+                        else:
+                            st.error("Not enough shares to sell.")
+                else:
+                    c.execute("INSERT INTO transactions (email, symbol, qty, price, action, order_type, trigger_price) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                              (st.session_state["user_email"], stock, qty, price, action, order_type, trigger_price))
+                    conn.commit()
+                    st.success("Order Placed Successfully")
 
-                elif action == "SELL":
-                    c.execute("""
-                        SELECT COALESCE(SUM(CASE WHEN action='BUY' THEN qty ELSE -qty END),0)
-                        FROM transactions WHERE email=%s AND symbol=%s
-                    """, (st.session_state["user_email"], stock))
-                    holding = c.fetchone()[0]
+        with col_chart:
+            # Add a manual refresh button for the chart
+            col_header, col_btn = st.columns([4,1])
+            col_header.subheader(f"{stock} Intraday Chart")
+            if col_btn.button("🔄"):
+                st.rerun()
 
-                    if holding >= qty:
-                        c.execute("UPDATE users SET balance=balance+%s WHERE email=%s",
-                                  (total, st.session_state["user_email"]))
-                        c.execute("""
-                            INSERT INTO transactions (email,symbol,qty,price,action,order_type)
-                            VALUES (%s,%s,%s,%s,'SELL','MARKET')
-                        """, (st.session_state["user_email"], stock, qty, price))
-                        conn.commit()
-                        st.success("Market Sell Executed")
-                        st.rerun()
-                    else:
-                        st.error("Not enough shares")
+            data = get_intraday_data(stock)
+
+            if data is None or data.empty:
+                st.warning("⚠️ Waiting for market data... (Market might be closed or Ticker invalid)")
             else:
-                c.execute("""
-                    INSERT INTO transactions
-                    (email,symbol,qty,price,action,order_type,trigger_price)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s)
-                """, (st.session_state["user_email"], stock, qty, price, action, order_type, trigger_price))
-                conn.commit()
-                st.success("Conditional order placed")
+                # Get the date string for the title
+                chart_date = data['Datetime'].iloc[0].strftime('%d %b %Y')
+                
+                fig = go.Figure()
+
+                # Candlestick Trace
+                fig.add_trace(go.Candlestick(
+                    x=data['Datetime'],
+                    open=data['Open'],
+                    high=data['High'],
+                    low=data['Low'],
+                    close=data['Close'],
+                    name='Price'
+                ))
+
+                fig.update_layout(
+                    height=500,
+                    xaxis_rangeslider_visible=False,
+                    template="plotly_white",
+                    title=f"<b>{stock}</b> • {chart_date} (5m Interval)",
+                    yaxis_title="Price (INR)",
+                    margin=dict(l=20, r=20, t=50, b=20)
+                )
+
+                st.plotly_chart(fig, use_container_width=True)
+
 
     # ==========================================
     # WATCHLIST
@@ -441,13 +533,20 @@ else:
         """, conn, params=(st.session_state["user_email"],))
 
         if not wl.empty:
-            wl["Live Price"] = wl["today_open"].apply(get_current_price)
+            wl["Live Price"] = wl.apply(
+                lambda row: get_live_price(row["symbol"], row["today_open"]),
+                axis=1
+            )
+
             st.dataframe(wl[["symbol", "Live Price"]], use_container_width=True)
 
     # ==========================================
     # PORTFOLIO
     # ==========================================
     elif menu == "Portfolio":
+        st.header("💼 My Portfolio")
+        
+        # Calculate Holdings
         df = pd.read_sql("""
             SELECT symbol,
             SUM(CASE WHEN action='BUY' THEN qty ELSE -qty END) qty,
@@ -459,20 +558,62 @@ else:
         """, conn, params=(st.session_state["user_email"],))
 
         if not df.empty:
+            # Get Live Prices
             stocks = pd.read_sql("SELECT symbol, today_open FROM stocks", conn)
             df = df.merge(stocks, on="symbol")
-            df["Current Price"] = df["today_open"].apply(get_current_price)
-            df["P/L"] = df["Current Price"] * df["qty"] - df["invested"]
+            
+            # Apply Fluctuation to make it feel live
+            df["Current Price"] = df.apply(
+                lambda row: get_live_price(row["symbol"], row["today_open"]),
+                axis=1
+            )
 
-            st.dataframe(df[["symbol", "qty", "Current Price", "P/L"]], use_container_width=True)
+            df["Current Value"] = df["Current Price"] * df["qty"]
+            df["P/L"] = df["Current Value"] - df["invested"]
+            df["P/L %"] = (df["P/L"] / df["invested"] * 100).round(2)
+            
+            # Summary Metrics
+            total_invested = df["invested"].sum()
+            current_value = df["Current Value"].sum()
+            total_pl = current_value - total_invested
+            
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Total Invested", f"₹ {total_invested:,.2f}")
+            m2.metric("Current Value", f"₹ {current_value:,.2f}", delta=f"{total_pl:,.2f}")
+            m3.metric("Total P/L", f"₹ {total_pl:,.2f}")
+            
+            st.divider()
 
-            fig, ax = plt.subplots()
-            ax.bar(df["symbol"], df["P/L"])
-            ax.axhline(0)
-            ax.set_ylabel("Profit / Loss (₹)")
-            st.pyplot(fig)
+            col_charts1, col_charts2 = st.columns(2)
+            
+            # Chart 1: Asset Allocation (Pie Chart)
+            with col_charts1:
+                st.subheader("Asset Allocation")
+                fig_pie = go.Figure(data=[go.Pie(labels=df['symbol'], values=df['Current Value'], hole=.4)])
+                fig_pie.update_layout(height=350, margin=dict(t=0, b=0, l=0, r=0))
+                st.plotly_chart(fig_pie, use_container_width=True)
+
+            # Chart 2: Profit/Loss per Stock (Bar Chart)
+            with col_charts2:
+                st.subheader("Stock-wise P/L")
+                colors = ['green' if val >= 0 else 'red' for val in df['P/L']]
+                fig_bar = go.Figure(data=[go.Bar(
+                    x=df['symbol'],
+                    y=df['P/L'],
+                    marker_color=colors
+                )])
+                fig_bar.update_layout(height=350, margin=dict(t=0, b=0, l=0, r=0))
+                st.plotly_chart(fig_bar, use_container_width=True)
+
+            # Detailed Table
+            st.subheader("Holdings Details")
+            st.dataframe(
+                df[["symbol", "qty", "invested", "Current Price", "Current Value", "P/L", "P/L %"]], 
+                use_container_width=True,
+                hide_index=True
+            )
         else:
-            st.info("No holdings")
+            st.info("You don't own any stocks yet. Go to 'Live Market' to buy some!")
 
     # ==========================================
     # HISTORY
