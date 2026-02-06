@@ -382,11 +382,7 @@ else:
     c = conn.cursor()
 
     st.sidebar.title(f"Hello, {st.session_state['user_name']}")
-
-    # menu = st.sidebar.radio(
-    #     "Navigation",
-    #     ["Dashboard", "Live Market & Trade", "Watchlist", "Portfolio", "History", "Leaderboard", "Add Funds"]
-    # )
+    
     menu_options = ["Dashboard", "Live Market & Trade", "Watchlist", "Portfolio", "History", "Leaderboard", "Add Funds", "Manage Stocks"]
     
     # Initialize menu choice in session state if it doesn't exist
