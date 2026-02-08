@@ -429,11 +429,16 @@ else:
                 st.dataframe(df_stocks, use_container_width=True, hide_index=True)
             else:
                 st.info("No stocks available in the market.")
+                
         # ==========================================
         # LIVE MARKET & TRADE
         # ==========================================
         elif menu == "Live Market & Trade":
             st.header("📈 Live Trading Terminal")
+            # Brokerage Configuration
+            COMMISSION_FLAT = 20.0  # Minimum ₹20
+            COMMISSION_PCT = 0.0005 # 0.05% of trade value
+            ADMIN_EMAIL = "admin@quantify.com"
 
             # 1. Stock Selection
             stocks = pd.read_sql("SELECT symbol, today_open FROM stocks", conn)
@@ -479,40 +484,71 @@ else:
 
                 # Buttons
                 if st.button("Confirm Order", use_container_width=True):
-                    # ... (Existing Order Logic - Copy your previous logic here or use the simplified version below) ...
+                    # 1. Calculate Costs
+                    total_trade_value = price * qty
+                    brokerage = max(COMMISSION_FLAT, total_trade_value * COMMISSION_PCT)
+
+                    # Check current user balance
                     c.execute("SELECT balance FROM users WHERE email=%s", (st.session_state["user_email"],))
-                    balance = c.fetchone()[0]
+                    user_balance = c.fetchone()[0]
 
                     if order_type == "MARKET":
                         if action == "BUY":
-                            if balance >= total:
-                                c.execute("UPDATE users SET balance=balance-%s WHERE email=%s", (total, st.session_state["user_email"]))
-                                c.execute("INSERT INTO transactions (email, symbol, qty, price, action, order_type) VALUES (%s, %s, %s, %s, 'BUY', 'MARKET')", 
-                                          (st.session_state["user_email"], stock, qty, price))
+                            grand_total = total_trade_value + brokerage
+                            if user_balance >= grand_total:
+                                # Deduct from User (Price + Brokerage)
+                                c.execute("UPDATE users SET balance = balance - %s WHERE email = %s", 
+                                          (grand_total, st.session_state["user_email"]))
+
+                                # Add to Admin (Brokerage only)
+                                c.execute("UPDATE users SET balance = balance + %s WHERE email = %s", 
+                                          (brokerage, ADMIN_EMAIL))
+
+                                # Log Transaction
+                                c.execute("""
+                                    INSERT INTO transactions (email, symbol, qty, price, action, order_type) 
+                                    VALUES (%s, %s, %s, %s, 'BUY', 'MARKET')
+                                """, (st.session_state["user_email"], stock, qty, price))
+
                                 conn.commit()
-                                st.success(f"Bought {qty} {stock}!")
+                                st.success(f"Trade successful! Brokerage of ₹{brokerage:.2f} collected.")
                                 st.rerun()
                             else:
-                                st.error(f"Insufficient Funds. Need ₹{total-balance:,.2f} more.")
+                                st.error(f"Insufficient funds. You need ₹{grand_total - user_balance:.2f} more.")
 
                         elif action == "SELL":
+                            # In a sell, the user gets the money MINUS the brokerage
+                            user_receives = total_trade_value - brokerage
+
                             c.execute("SELECT COALESCE(SUM(CASE WHEN action='BUY' THEN qty ELSE -qty END),0) FROM transactions WHERE email=%s AND symbol=%s", 
                                       (st.session_state["user_email"], stock))
                             holding = c.fetchone()[0]
+
                             if holding >= qty:
-                                c.execute("UPDATE users SET balance=balance+%s WHERE email=%s", (total, st.session_state["user_email"]))
-                                c.execute("INSERT INTO transactions (email, symbol, qty, price, action, order_type) VALUES (%s, %s, %s, %s, 'SELL', 'MARKET')", 
-                                          (st.session_state["user_email"], stock, qty, price))
+                                # Add to User (Price - Brokerage)
+                                c.execute("UPDATE users SET balance = balance + %s WHERE email = %s", 
+                                          (user_receives, st.session_state["user_email"]))
+
+                                # Add to Admin (Brokerage only)
+                                c.execute("UPDATE users SET balance = balance + %s WHERE email = %s", 
+                                          (brokerage, ADMIN_EMAIL))
+
+                                # Log Transaction
+                                c.execute("""
+                                    INSERT INTO transactions (email, symbol, qty, price, action, order_type) 
+                                    VALUES (%s, %s, %s, %s, 'SELL', 'MARKET')
+                                """, (st.session_state["user_email"], stock, qty, price))
+
                                 conn.commit()
-                                st.success(f"Sold {qty} {stock}!")
+                                st.success(f"Sold successfully! ₹{brokerage:.2f} brokerage sent to Admin.")
                                 st.rerun()
                             else:
                                 st.error("Not enough shares to sell.")
-                    else:
-                        c.execute("INSERT INTO transactions (email, symbol, qty, price, action, order_type, trigger_price) VALUES (%s, %s, %s, %s, %s, %s, %s)",
-                                  (st.session_state["user_email"], stock, qty, price, action, order_type, trigger_price))
-                        conn.commit()
-                        st.success("Order Placed Successfully")
+                        else:
+                            c.execute("INSERT INTO transactions (email, symbol, qty, price, action, order_type, trigger_price) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                                      (st.session_state["user_email"], stock, qty, price, action, order_type, trigger_price))
+                            conn.commit()
+                            st.success("Order Placed Successfully")
 
             with col_chart:
                 # Add a manual refresh button for the chart
@@ -668,20 +704,8 @@ else:
 
 
         # ==========================================
-        # ADD FUNDS
+        # ADD FUNDS (PROFESSIONAL FLOW)
         # ==========================================
-        # elif menu == "Add Funds":
-        #     amt = st.number_input("Amount", min_value=1.0)
-        #     if st.button("Add Money"):
-        #         c.execute("UPDATE users SET balance=balance+%s WHERE email=%s",
-        #                   (amt, st.session_state["user_email"]))
-        #         conn.commit()
-        #         st.success("Funds added")
-        #         st.rerun()
-
-        # ==========================================
-# ADD FUNDS (PROFESSIONAL FLOW)
-# ==========================================
         elif menu == "Add Funds":
             st.header("💳 Add Funds to Wallet")
 
