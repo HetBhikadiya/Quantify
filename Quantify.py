@@ -78,6 +78,14 @@ def hash_password(password):
 def check_password(password, hashed):
     return bcrypt.checkpw(password.encode(), hashed.encode())
 
+def validate_mobile(mobile):
+    """
+    Validates a 10-digit Indian mobile number.
+    - Must be exactly 10 digits.
+    - Must start with 6, 7, 8, or 9.
+    """
+    return bool(re.match(r'^[6-9]\d{9}$', str(mobile)))
+
 def fetch_stock_data(ticker):
     """Accurately fetch Open and Prev Close using history"""
     try:
@@ -344,8 +352,8 @@ if not st.session_state["logged_in"]:
                         st.error("Invalid PAN format.")
                     elif not validate_ifsc(ifsc_code):
                         st.error("Invalid IFSC code.")
-                    elif not phone.isdigit() or len(phone) < 10:
-                        st.error("Please enter a valid 10-digit phone number.")
+                    elif not validate_mobile(phone):
+                        st.error("Please enter a valid 10-digit mobile number starting with 6-9.")
                     elif not account_no.isdigit():
                         st.error("Account number should only contain digits.")
                     elif not bank_name or not account_no or not ifsc_code:
@@ -386,7 +394,7 @@ else:
         menu_options = ["Dashboard", "Live Market & Trade", "Watchlist", "Portfolio", "History", "Add Funds"]
 
         # Initialize menu choice in session state if it doesn't exist
-        if "menu_choice" not in st.session_state:
+        if "menu_choice" not in st.session_state or st.session_state.menu_choice not in menu_options:
             st.session_state.menu_choice = "Dashboard"
 
         # Determine the index of the current choice to keep the radio button in sync
@@ -420,7 +428,7 @@ else:
                 df_stocks['Change %'] = ((df_stocks['today_open'] - df_stocks['prev_close']) / df_stocks['prev_close'] * 100).round(2)
                 st.dataframe(df_stocks, use_container_width=True, hide_index=True)
             else:
-                st.info("No stocks available in the market. Please add some via 'Manage Stocks'.")
+                st.info("No stocks available in the market.")
         # ==========================================
         # LIVE MARKET & TRADE
         # ==========================================
@@ -662,15 +670,80 @@ else:
         # ==========================================
         # ADD FUNDS
         # ==========================================
-        elif menu == "Add Funds":
-            amt = st.number_input("Amount", min_value=1.0)
-            if st.button("Add Money"):
-                c.execute("UPDATE users SET balance=balance+%s WHERE email=%s",
-                          (amt, st.session_state["user_email"]))
-                conn.commit()
-                st.success("Funds added")
-                st.rerun()
+        # elif menu == "Add Funds":
+        #     amt = st.number_input("Amount", min_value=1.0)
+        #     if st.button("Add Money"):
+        #         c.execute("UPDATE users SET balance=balance+%s WHERE email=%s",
+        #                   (amt, st.session_state["user_email"]))
+        #         conn.commit()
+        #         st.success("Funds added")
+        #         st.rerun()
 
+        # ==========================================
+# ADD FUNDS (PROFESSIONAL FLOW)
+# ==========================================
+        elif menu == "Add Funds":
+            st.header("💳 Add Funds to Wallet")
+
+            col1, col2 = st.columns([1, 1])
+
+            with col1:
+                amt = st.number_input("Enter Amount (₹)", min_value=100.0, step=100.0, help="Minimum deposit is ₹100")
+                method = st.selectbox("Payment Method", ["UPI", "Net Banking", "Debit Card"])
+
+                if st.button("Proceed to Pay", use_container_width=True):
+                    if amt < 100:
+                        st.error("Minimum amount is ₹100")
+                    else:
+                        # STEP 1: Simulate Payment Gateway
+                        with st.status("Connecting to Payment Gateway...", expanded=True) as status:
+                            st.write("Verifying Bank Details...")
+                            import time
+                            time.sleep(1)
+                            st.write("Waiting for User Confirmation...")
+                            time.sleep(1.5)
+                            st.write("Payment Authorized!")
+                            status.update(label="Payment Successful!", state="complete", expanded=False)
+
+                        # STEP 2: Create a Transaction ID
+                        tx_id = f"TXN{random.randint(100000, 999999)}"
+
+                        try:
+                            # STEP 3: Update User Balance
+                            c.execute("UPDATE users SET balance = balance + %s WHERE email = %s", 
+                                     (amt, st.session_state["user_email"]))
+
+                            # STEP 4: Log the transaction (Assuming you have a fund_logs table)
+                            # If you don't have this table yet, I recommend creating it!
+                            # c.execute("INSERT INTO fund_logs (email, tx_id, amount, method, status) VALUES (%s, %s, %s, %s, 'SUCCESS')",
+                            #          (st.session_state["user_email"], tx_id, amt, method))
+
+                            conn.commit()
+
+                            st.success(f"Successfully added ₹{amt:,.2f} to your account!")
+                            st.info(f"Transaction ID: {tx_id}")
+
+                            # Small delay before rerun to let user see the success message
+                            time.sleep(2)
+                            st.rerun()
+
+                        except Exception as e:
+                            st.error(f"Transaction Failed: {e}")
+
+            with col2:
+                # Display current balance for reference
+                c.execute("SELECT balance FROM users WHERE email=%s", (st.session_state["user_email"],))
+                current_bal = c.fetchone()[0]
+                st.metric("Current Available Balance", f"₹ {current_bal:,.2f}")
+
+                st.warning("""
+                **Note:** * Funds will reflect in your account immediately.
+                * Please do not refresh the page during transaction.
+                """)
+
+    # ==========================================
+    # ADMON SECTION
+    # ==========================================
     else:
         st.sidebar.title(f"Hello, Admin")
         menu_options = ["Leaderboard","Manage stocks"]
@@ -767,10 +840,10 @@ else:
                     with st.spinner(f"Requesting data for {selected_stock}..."):
                         # 1. Fetch Open and Previous Close using your helper
                         stock_info = fetch_stock_data(selected_stock)
-                        
+
                         # 2. Fetch Live Price using your helper
                         current_price, last_time = get_live_exchange_price(selected_stock)
-                
+
                         if not stock_info:
                             st.error("❌ Could not fetch historical data. Check the ticker symbol.")
                         elif current_price is None:
@@ -778,7 +851,7 @@ else:
                         else:
                             t_open = stock_info['today_open']
                             p_close = stock_info['prev_close']
-                
+
                             # 3. UPDATE DATABASE
                             try:
                                 c.execute("""
@@ -787,20 +860,20 @@ else:
                                     WHERE symbol=%s
                                 """, (t_open, p_close, selected_stock.replace('.NS', ''))) # Sync symbol format
                                 conn.commit()
-                
+
                                 # 4. DISPLAY RESULTS IN STREAMLIT
                                 st.success(f"✅ Database Updated for {selected_stock}")
-                
+
                                 # Metrics Row
                                 m1, m2, m3, m4 = st.columns(4)
                                 m1.metric("Today's Open", f"₹ {t_open}")
                                 m2.metric("Prev Close", f"₹ {p_close}")
                                 m3.metric("Current Price", f"₹ {current_price}", help=f"Last traded: {last_time}")
-                
+
                                 change = t_open - p_close
                                 pct = (change / p_close) * 100
                                 m4.metric("Overnight Gap", f"{change:+.2f}", f"{pct:+.2f}%")
-                
+
                             except Exception as e:
                                 st.error(f"❌ Database Update Error: {str(e)}")
 
