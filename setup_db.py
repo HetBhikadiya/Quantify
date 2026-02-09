@@ -62,6 +62,7 @@ try:
                     action VARCHAR(10),
                     order_type VARCHAR(20) DEFAULT 'MARKET',
                     trigger_price DOUBLE NULL,
+                    status VARCHAR(20) DEFAULT 'PENDING',
                     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
             """)

@@ -170,43 +170,55 @@ def add_stock_to_db(ticker, conn):
 # ==========================================
 # AUTO EXECUTE LIMIT / STOP ORDERS
 # ==========================================
-def process_pending_orders(conn):
+def process_pending_limit_orders(conn):
     c = conn.cursor()
-    orders = pd.read_sql("""
-        SELECT id, email, symbol, qty, action, order_type, trigger_price, price
-        FROM transactions
-        WHERE order_type != 'MARKET'
-    """, conn)
+    # Fetch all pending orders across all users
+    c.execute("SELECT id, email, symbol, qty, action, order_type, trigger_price FROM transactions WHERE status='PENDING'")
+    pending_orders = c.fetchall()
 
-    for _, o in orders.iterrows():
-        # Get REAL market price for the pending order symbol
-        current_price, _ = get_live_exchange_price(o["symbol"])
+    for order in pending_orders:
+        oid, email, symbol, qty, action, o_type, t_price = order
+        current_price, _ = get_live_exchange_price(symbol)
+        
         if current_price is None: 
             continue
 
-        execute = (
-            (o["order_type"] == "LIMIT BUY" and current_price <= o["trigger_price"]) or
-            (o["order_type"] == "LIMIT SELL" and current_price >= o["trigger_price"]) or
-            (o["order_type"] == "STOP-LOSS" and current_price <= o["trigger_price"])
-        )
+        # Logic: Does the market price satisfy the trigger?
+        should_execute = False
+        if "BUY" in o_type and current_price <= t_price:
+            should_execute = True
+        elif "SELL" in o_type and current_price >= t_price:
+            should_execute = True
+        elif o_type == "STOP-LOSS" and current_price <= t_price:
+            should_execute = True
 
-        if execute:
-            amount = current_price * o["qty"]
+        if should_execute:
+            total_val = current_price * qty
+            # Fetch Brokerage (reuse your logic)
+            COMMISSION_FLAT = 20.0
+            COMMISSION_PCT = 0.0005
+            brokerage = max(COMMISSION_FLAT, total_val * COMMISSION_PCT)
 
-            if o["action"] == "BUY":
-                c.execute("UPDATE users SET balance=balance-%s WHERE email=%s",
-                          (amount, o["email"]))
-            else:
-                c.execute("UPDATE users SET balance=balance+%s WHERE email=%s",
-                          (amount, o["email"]))
-
-            c.execute("""
-                UPDATE transactions
-                SET order_type='MARKET', price=%s
-                WHERE id=%s
-            """, (current_price, o["id"]))
-
+            if action == "BUY":
+                c.execute("SELECT balance FROM users WHERE email=%s", (email,))
+                user_bal = c.fetchone()[0]
+                grand_total = total_val + brokerage
+                
+                if user_bal >= grand_total:
+                    # Deduct from user, Pay Admin, Complete Order
+                    c.execute("UPDATE users SET balance = balance - %s WHERE email=%s", (grand_total, email))
+                    c.execute("UPDATE users SET balance = balance + %s WHERE email='admin@quantify.com'", (brokerage,))
+                    c.execute("UPDATE transactions SET status='COMPLETE', price=%s WHERE id=%s", (current_price, oid))
+            
+            elif action == "SELL":
+                user_receives = total_val - brokerage
+                # Add to user, Pay Admin, Complete Order
+                c.execute("UPDATE users SET balance = balance + %s WHERE email=%s", (user_receives, email))
+                c.execute("UPDATE users SET balance = balance + %s WHERE email='admin@quantify.com'", (brokerage,))
+                c.execute("UPDATE transactions SET status='COMPLETE', price=%s WHERE id=%s", (current_price, oid))
+            
             conn.commit()
+
 # ==========================================
 # RELIABLE YFINANCE HELPERS (FIX FOR CHARTS)
 # ==========================================
@@ -383,7 +395,7 @@ if not st.session_state["logged_in"]:
 # ==========================================
 else:
     conn = get_connection()
-    process_pending_orders(conn)
+    process_pending_limit_orders(conn)
     c = conn.cursor()
 
     au=pd.read_sql("SELECT email from users",conn)
@@ -429,7 +441,7 @@ else:
                 st.dataframe(df_stocks, use_container_width=True, hide_index=True)
             else:
                 st.info("No stocks available in the market.")
-                
+
         # ==========================================
         # LIVE MARKET & TRADE
         # ==========================================
@@ -491,6 +503,17 @@ else:
                     # Check current user balance
                     c.execute("SELECT balance FROM users WHERE email=%s", (st.session_state["user_email"],))
                     user_balance = c.fetchone()[0]
+
+                    # --- INSIDE Confirm Order Logic ---
+                    if order_type in ["LIMIT BUY", "LIMIT SELL", "STOP-LOSS"]:
+                        # For Limit Orders, we just record the intent. No balance is deducted yet.
+                        c.execute("""
+                            INSERT INTO transactions (email, symbol, qty, price, action, order_type, trigger_price, status) 
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, 'PENDING')
+                        """, (st.session_state["user_email"], stock, qty, price, action, order_type, trigger_price))
+                        conn.commit()
+                        st.info(f"Limit Order placed at ₹{trigger_price}. It will execute when the price hits this target.")
+                        st.rerun()
 
                     if order_type == "MARKET":
                         if action == "BUY":
@@ -688,6 +711,50 @@ else:
                         use_container_width=True,
                         hide_index=True
                     )
+
+                    # --- INSIDE Portfolio Section ---
+                    st.write("---")
+                    st.subheader("⏳ Pending Orders")
+
+                    # Fetch only PENDING orders
+                    pending_df = pd.read_sql("""
+                        SELECT id, symbol, qty, action, order_type, trigger_price 
+                        FROM transactions 
+                        WHERE email=%s AND status='PENDING'
+                    """, conn, params=(st.session_state["user_email"],))
+
+                    if not pending_df.empty:
+                        # Header row for the "Manual" table
+                        h_col1, h_col2, h_col3, h_col4, h_col5, h_col6 = st.columns([2, 1, 1, 2, 2, 1])
+                        h_col1.write("**Stock**")
+                        h_col2.write("**Qty**")
+                        h_col3.write("**Action**")
+                        h_col4.write("**Type**")
+                        h_col5.write("**Trigger**")
+                        h_col6.write("**Cancel**")
+
+                        for _, row in pending_df.iterrows():
+                            c1, c2, c3, c4, c5, c6 = st.columns([2, 1, 1, 2, 2, 1])
+
+                            c1.write(row['symbol'])
+                            c2.write(row['qty'])
+                            c3.write(row['action'])
+                            c4.write(row['order_type'])
+                            c5.write(f"₹{row['trigger_price']}")
+
+                            # Unique key for each button using transaction ID
+                            if c6.button("❌", key=f"cancel_{row['id']}"):
+                                try:
+                                    # Delete the pending order from DB
+                                    c.execute("DELETE FROM transactions WHERE id=%s AND email=%s", 
+                                              (row['id'], st.session_state["user_email"]))
+                                    conn.commit()
+                                    st.toast(f"Order for {row['symbol']} cancelled.")
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Error: {e}")
+                    else:
+                        st.info("No pending orders at the moment.")
             else:
                 st.info("You don't own any stocks yet. Go to 'Live Market' to buy some!")
 
