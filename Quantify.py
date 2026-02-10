@@ -843,6 +843,9 @@ else:
             st.session_state.menu_choice = "Leaderboard"
 
         # Determine the index of the current choice to keep the radio button in sync
+        if st.session_state.menu_choice not in menu_options:
+            st.session_state.menu_choice = menu_options[0]
+
         current_index = menu_options.index(st.session_state.menu_choice)
 
         # Update choice based on sidebar selection
@@ -977,3 +980,4 @@ else:
 
             else:
                 st.info("Your database is empty. Add a stock symbol to get started.")
+    
