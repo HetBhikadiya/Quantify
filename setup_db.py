@@ -28,15 +28,16 @@ try:
                     email VARCHAR(255) PRIMARY KEY,
                     username VARCHAR(255),
                     password VARCHAR(255),
-                    aadhar VARCHAR(12),
-                    pan VARCHAR(10),
-                    phone VARCHAR(15),
+                    aadhar VARCHAR(12) UNIQUE,
+                    pan VARCHAR(10) UNIQUE,
+                    phone VARCHAR(15) UNIQUE,
                     gender VARCHAR(20),
                     dob DATE,
                     bank_name VARCHAR(255),
-                    account_no VARCHAR(50),
+                    account_no VARCHAR(50) UNIQUE,
                     ifsc_code VARCHAR(20),
-                    balance DOUBLE DEFAULT 0.0
+                    balance DOUBLE DEFAULT 0.0,
+                    status VARCHAR(20) DEFAULT 'ACTIVE',
                 )
             """)
 
@@ -52,20 +53,10 @@ try:
             """)
 
             # Create Transactions Table
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS transactions (
-                    id INT AUTO_INCREMENT PRIMARY KEY,
-                    email VARCHAR(255),
-                    symbol VARCHAR(50),
-                    qty INT,
-                    price DOUBLE,
-                    action VARCHAR(10),
-                    order_type VARCHAR(20) DEFAULT 'MARKET',
-                    trigger_price DOUBLE NULL,
-                    status VARCHAR(20) DEFAULT 'PENDING',
-                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
+            
+
+
+            
 
             # Create Watchlist Table (Needed for your app logic)
             cursor.execute("""

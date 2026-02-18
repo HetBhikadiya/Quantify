@@ -292,24 +292,49 @@ if not st.session_state["logged_in"]:
                 password = st.text_input("Password", type="password")
                 
                 if st.form_submit_button("Login", use_container_width=True):
+                
                     conn = get_connection()
                     c = conn.cursor()
-                    c.execute("SELECT username, password FROM users WHERE email=%s", (email,))
+        
+                    # Fetch username, hashed password, and status
+                    c.execute(
+                        "SELECT username, password, status FROM users WHERE email=%s",
+                        (email,)
+                    )
                     user = c.fetchone()
-
-                    if user and check_password(password, user[1]):
-                        with st.spinner("🔄 Synchronizing Market Data..."):
-                            sync_all_stocks(conn) # <--- THIS UPDATES THE DB
-
-                        st.session_state.update({
-                            "logged_in": True, 
-                            "user_email": email, 
-                            "user_name": user[0]
-                        })
-                        conn.close()
-                        st.rerun()
-                    else:
+        
+                    if not user:
                         st.error("Invalid credentials")
+                        conn.close()
+        
+                    else:
+                        username, stored_password, status = user
+        
+                        # ✅ CHECK 1 — Suspension block
+                        if status == "SUSPENDED":
+                            st.error("🚫 Your account has been suspended by admin.")
+                            conn.close()
+                            st.stop()
+        
+                        # ✅ CHECK 2 — Password verification
+                        if check_password(password, stored_password):
+                        
+                            with st.spinner("🔄 Synchronizing Market Data..."):
+                                sync_all_stocks(conn)
+        
+                            st.session_state.update({
+                                "logged_in": True,
+                                "user_email": email,
+                                "user_name": username
+                            })
+        
+                            conn.close()
+                            st.rerun()
+        
+                        else:
+                            st.error("Invalid credentials")
+                            conn.close()
+
 
         # ---------- SIGN UP PAGE (WITH AGE ELIGIBILITY) ----------
         elif auth_mode == "Sign Up":
@@ -373,19 +398,56 @@ if not st.session_state["logged_in"]:
                         try:
                             conn = get_connection()
                             c = conn.cursor()
+
+                            # ===============================
+                            # ✅ STEP 1 — CHECK PAN FIRST
+                            # ===============================
+                            c.execute("SELECT email, status FROM users WHERE pan=%s", (pan.upper(),))
+                            pan_record = c.fetchone()
+
+                            # 🚫 PAN exists & suspended → block signup completely
+                            if pan_record and pan_record[1] == "SUSPENDED":
+                                st.error("🚫 This PAN is linked to a suspended account. You cannot register again.")
+                                conn.close()
+                                st.stop()
+
+                            # 🚫 PAN exists & active → already registered
+                            if pan_record:
+                                st.error("This PAN is already registered with another account.")
+                                conn.close()
+                                st.stop()
+
+                            # ===============================
+                            # ✅ STEP 2 — CHECK EMAIL
+                            # ===============================
+                            c.execute("SELECT email FROM users WHERE email=%s", (email,))
+                            email_record = c.fetchone()
+
+                            if email_record:
+                                st.error("This email is already registered. Please login instead.")
+                                conn.close()
+                                st.stop()
+
+                            # ===============================
+                            # ✅ STEP 3 — INSERT NEW USER
+                            # ===============================
                             query = """
                                 INSERT INTO users (
                                     email, username, password, aadhar, pan, 
                                     phone, gender, dob, bank_name, account_no, ifsc_code, balance
                                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 0.0)
                             """
+
                             c.execute(query, (
                                 email, username, hash_password(password), aadhar, pan.upper(),
                                 phone, gender, dob, bank_name, account_no, ifsc_code.upper()
                             ))
+
                             conn.commit()
                             conn.close()
+
                             st.success("Registration successful! You can now switch to Login.")
+                        
                         except pymysql.err.IntegrityError:
                             st.error("This email is already registered.")
 
@@ -469,14 +531,7 @@ else:
                 if price is None:
                     st.warning("📴 Live market data unavailable")
                     st.stop()
-
-                # st.metric(
-                #     "Live Exchange Price",
-                #     f"₹ {price}",
-                #     help=f"NSE • Last Updated: {time_stamp}"
-                # )
-
-                # Metrics
+                    
                 st.metric("Live Price", f"₹ {price:,.2f}", delta=round(price - base, 2))
 
                 st.divider()
@@ -858,11 +913,11 @@ else:
         # LEADERBOARD
         # ==========================================
         if menu == "Leaderboard":
-            users = pd.read_sql("SELECT email, username, balance FROM users", conn)
+
+            users = pd.read_sql("SELECT email, username, balance, status FROM users", conn)
             stocks = pd.read_sql("SELECT symbol, today_open FROM stocks", conn)
             tx = pd.read_sql("SELECT email, symbol, qty, action FROM transactions", conn)
 
-            # Optimize: Fetch each stock price only once
             unique_stocks = tx['symbol'].unique()
             live_prices = {s: get_live_exchange_price(s)[0] for s in unique_stocks}
 
@@ -882,12 +937,39 @@ else:
                         if current_price:
                             portfolio_value += (current_price * qty)
 
-                leaderboard.append({"User": u["username"], "Portfolio Value": portfolio_value})
+                leaderboard.append({
+                    "User": u["username"],
+                    "Email": u["email"],
+                    "Portfolio Value": portfolio_value,
+                    "Status": u["status"]
+                })
 
             lb_df = pd.DataFrame(leaderboard).sort_values("Portfolio Value", ascending=False)
             lb_df["Rank"] = range(1, len(lb_df) + 1)
 
-            st.dataframe(lb_df[["Rank", "User", "Portfolio Value"]], use_container_width=True)
+            # Show leaderboard with suspend button
+            for _, row in lb_df.iterrows():
+            
+                col1, col2, col3, col4, col5 = st.columns([1,2,2,2,2])
+
+                col1.write(row["Rank"])
+                col2.write(row["User"])
+                col3.write(f"₹ {row['Portfolio Value']:.2f}")
+                col4.write(row["Status"])
+
+                cursor = conn.cursor()
+                if row["Status"] == "ACTIVE":
+                    if col5.button("Suspend", key=row["Email"]):
+                        cursor.execute(
+                            "UPDATE users SET status='SUSPENDED' WHERE email=%s",
+                            (row["Email"],)
+                        )
+                        conn.commit()
+                        st.success(f"{row['User']} suspended")
+                        st.rerun()
+                else:
+                    col5.write("🚫 Suspended")
+
 
         # ==========================================
         # MANAGE STOCKS (ADMIN/POWER USER)
