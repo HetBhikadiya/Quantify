@@ -133,6 +133,28 @@ def sync_all_stocks(conn):
             """, (data['today_open'], data['prev_close'], data['company_name'], sym))
     conn.commit()
 
+import os
+from datetime import datetime
+
+def save_trade_to_file(email, stock, qty, price, action, order_type):
+    # Folder to store logs
+    folder = "trade_logs"
+    os.makedirs(folder, exist_ok=True)
+
+    # Safe filename (replace @ and .)
+    safe_email = email.replace("@","_").replace(".","_")
+    file_path = os.path.join(folder, f"{safe_email}.txt")
+
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    line = (
+        f"{now} | {action} | {stock} | Qty: {qty} | "
+        f"Price: ₹{price:.2f} | Brokerage: ₹{brokerage:.2f} | Type: {order_type}\n"
+    )
+
+    with open(file_path, "a", encoding="utf-8") as f:
+        f.write(line)
+
 # ==========================================
 # YFINANCE FUNCTIONS
 # ==========================================
@@ -588,7 +610,16 @@ else:
                                 """, (st.session_state["user_email"], stock, qty, price))
 
                                 conn.commit()
-                                st.success(f"Trade successful! Brokerage of ₹{brokerage:.2f} collected.")
+
+                                save_trade_to_file(
+                                st.session_state["user_email"],
+                                stock,
+                                qty,
+                                price,
+                                "BUY",
+                                "MARKET"
+                            )
+
                                 st.rerun()
                             else:
                                 st.error(f"Insufficient funds. You need ₹{grand_total - user_balance:.2f} more.")
