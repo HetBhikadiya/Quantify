@@ -54,11 +54,21 @@ try:
             """)
 
             # Create Transactions Table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS transactions (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    email VARCHAR(255),
+                    symbol VARCHAR(50),
+                    qty INT,
+                    price DOUBLE,
+                    action VARCHAR(10),
+                    order_type VARCHAR(20) DEFAULT 'MARKET',
+                    trigger_price DOUBLE NULL,
+                    status VARCHAR(20) DEFAULT 'PENDING',
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
             
-
-
-            
-
             # Create Watchlist Table (Needed for your app logic)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS watchlist (
