@@ -887,36 +887,65 @@ else:
                 """)
 
     # ==========================================
-    # ADMON SECTION
+    # ADMIN SECTION
     # ==========================================
     else:
-        st.sidebar.title(f"Hello, Admin")
-        menu_options = ["Leaderboard","Manage stocks"]
+        st.sidebar.title("Hello, Admin")
+
+        menu_options = ["Dashboard","Leaderboard","Transactions","Manage stocks"]
 
         if "menu_choice" not in st.session_state:
-            st.session_state.menu_choice = "Leaderboard"
+            st.session_state.menu_choice = "Dashboard"
 
-        # Determine the index of the current choice to keep the radio button in sync
         if st.session_state.menu_choice not in menu_options:
             st.session_state.menu_choice = menu_options[0]
 
         current_index = menu_options.index(st.session_state.menu_choice)
-
-        # Update choice based on sidebar selection
         st.session_state.menu_choice = st.sidebar.radio("Navigation", menu_options, index=current_index)
         menu = st.session_state.menu_choice
 
         if st.sidebar.button("Logout"):
             st.session_state["logged_in"] = False
             st.rerun()
-        # ==========================================
-        # LEADERBOARD
-        # ==========================================
-        if menu == "Leaderboard":
 
-            users = pd.read_sql("SELECT email, username, balance, status FROM users", conn)
-            stocks = pd.read_sql("SELECT symbol, today_open FROM stocks", conn)
+        conn = get_connection()
+
+        # ==========================================
+        # ADMIN DASHBOARD
+        # ==========================================
+        if menu == "Dashboard":
+
+            st.header("📊 Platform Overview")
+
+            users = pd.read_sql("SELECT * FROM users", conn)
+            tx = pd.read_sql("SELECT * FROM transactions", conn)
+            stocks = pd.read_sql("SELECT * FROM stocks", conn)
+
+            col1,col2,col3,col4 = st.columns(4)
+
+            col1.metric("Total Users", len(users))
+            col2.metric("Active Users", (users["status"]=="ACTIVE").sum())
+            col3.metric("Suspended Users", (users["status"]=="SUSPENDED").sum())
+            col4.metric("Stocks Listed", len(stocks))
+
+            st.divider()
+
+            st.subheader("Top Traders")
+            if not tx.empty:
+                top = users.sort_values("balance",ascending=False).head(10)
+                chart_df = top.set_index("username")["balance"]
+                st.bar_chart(chart_df)
+
+        # ==========================================
+        # LEADERBOARD + USER MANAGEMENT
+        # ==========================================
+        elif menu == "Leaderboard":
+
+            users = pd.read_sql("SELECT * FROM users", conn)
             tx = pd.read_sql("SELECT email, symbol, qty, action FROM transactions", conn)
+
+            # 🔎 SEARCH USER
+            search = st.text_input("Search user")
 
             unique_stocks = tx['symbol'].unique()
             live_prices = {s: get_live_exchange_price(s)[0] for s in unique_stocks}
@@ -929,13 +958,13 @@ else:
 
                 for sym in user_tx["symbol"].unique():
                     qty = user_tx[user_tx["symbol"] == sym].apply(
-                        lambda x: x["qty"] if x["action"] == "BUY" else -x["qty"], axis=1
+                        lambda x: x["qty"] if x["action"]=="BUY" else -x["qty"], axis=1
                     ).sum()
 
-                    if qty > 0:
-                        current_price = live_prices.get(sym)
-                        if current_price:
-                            portfolio_value += (current_price * qty)
+                    if qty>0:
+                        price = live_prices.get(sym)
+                        if price:
+                            portfolio_value += price*qty
 
                 leaderboard.append({
                     "User": u["username"],
@@ -944,121 +973,121 @@ else:
                     "Status": u["status"]
                 })
 
-            lb_df = pd.DataFrame(leaderboard).sort_values("Portfolio Value", ascending=False)
-            lb_df["Rank"] = range(1, len(lb_df) + 1)
+            lb_df = pd.DataFrame(leaderboard).sort_values("Portfolio Value",ascending=False)
+            lb_df["Rank"] = range(1,len(lb_df)+1)
 
-            # Show leaderboard with suspend button
+            if search:
+                lb_df = lb_df[lb_df["User"].str.contains(search,case=False)]
+
+            # 🎖️ SHOW TABLE
             for _, row in lb_df.iterrows():
-            
-                col1, col2, col3, col4, col5 = st.columns([1,2,2,2,2])
+
+                col1,col2,col3,col4,col5,col6,col7 = st.columns([1,2,2,2,2,2,2])
 
                 col1.write(row["Rank"])
                 col2.write(row["User"])
                 col3.write(f"₹ {row['Portfolio Value']:.2f}")
                 col4.write(row["Status"])
 
-                cursor = conn.cursor()
-                if row["Status"] == "ACTIVE":
-                    if col5.button("Suspend", key=row["Email"]):
-                        cursor.execute(
-                            "UPDATE users SET status='SUSPENDED' WHERE email=%s",
-                            (row["Email"],)
-                        )
-                        conn.commit()
-                        st.success(f"{row['User']} suspended")
-                        st.rerun()
-                else:
-                    col5.write("🚫 Suspended")
+                # 👁 VIEW USER DETAILS
+                if col5.button("View", key="v_"+row["Email"]):
+                    user_details = pd.read_sql(
+                        "SELECT * FROM users WHERE email=%s",
+                        conn,
+                        params=(row["Email"],)
+                    )
+                    st.json(user_details.iloc[0].to_dict())
 
+                # 📝 SUSPENSION REASON
+                reason = col6.text_input("Reason", key="r_"+row["Email"])
+
+                # 🔴 SUSPEND / 🟢 UNSUSPEND
+                with conn.cursor() as cursor:
+
+                    if row["Status"]=="ACTIVE":
+                        if col7.button("Suspend", key="s_"+row["Email"]):
+                            cursor.execute(
+                                "UPDATE users SET status='SUSPENDED', suspend_reason=%s WHERE email=%s",
+                                (reason,row["Email"])
+                            )
+                            conn.commit()
+                            st.success(f"{row['User']} suspended")
+                            st.rerun()
+                    else:
+                        if col7.button("Unsuspend", key="u_"+row["Email"]):
+                            cursor.execute(
+                                "UPDATE users SET status='ACTIVE', suspend_reason=NULL WHERE email=%s",
+                                (row["Email"],)
+                            )
+                            conn.commit()
+                            st.success(f"{row['User']} restored")
+                            st.rerun()
 
         # ==========================================
-        # MANAGE STOCKS (ADMIN/POWER USER)
+        # TRANSACTION INSPECTOR
+        # ==========================================
+        elif menu == "Transactions":
+
+            st.header("📜 All Transactions")
+
+            tx = pd.read_sql(
+                "SELECT email,symbol,qty,price,action,status,timestamp FROM transactions ORDER BY timestamp DESC",
+                conn
+            )
+
+            st.dataframe(tx,use_container_width=True)
+
+        # ==========================================
+        # MANAGE STOCKS (YOUR ORIGINAL LOGIC KEPT)
         # ==========================================
         elif menu == "Manage stocks":
+
             st.header("🛠️ Real-Time Stock Management")
-            st.write("Sync database values with live exchange data (including 10:00 AM capture).")
 
-                # --- Section 1: Add New Stock ---
             with st.expander("➕ Add New Stock", expanded=True):
-                col1, col2 = st.columns([3, 1])
-                with col1:
-                    new_ticker = st.text_input("Ticker Symbol", placeholder="e.g. AAPL, RELIANCE.NS, TSLA")
-                with col2:
-                    st.write("##") 
-                    if st.button("Add/Update Stock", use_container_width=True):
-                        if new_ticker:
-                            with st.spinner(f"Pulling data for {new_ticker}..."):
-                                # This calls the updated fetch function internally
-                                new_ticker=new_ticker+'.NS'
-                                success = add_stock_to_db(new_ticker.upper(), conn)
-                                if success:
-
-                                    st.success(f"Added/Updated {new_ticker.upper()} with today's open price.")
-                                    st.rerun()
-                                else:
-                                    st.warning("Enter Appropriate Stock")
-                        else:
-                            st.warning("Please enter a ticker symbol.")
+                col1,col2 = st.columns([3,1])
+                new_ticker = col1.text_input("Ticker Symbol")
+                if col2.button("Add/Update Stock",use_container_width=True):
+                    if new_ticker:
+                        new_ticker=new_ticker+'.NS'
+                        success=add_stock_to_db(new_ticker.upper(),conn)
+                        if success:
+                            st.success("Stock Added/Updated")
+                            st.rerun()
 
             st.divider()
-            # Pull current stock list from your database
-            db_stocks = pd.read_sql("SELECT symbol, company_name FROM stocks", conn)
+
+            db_stocks=pd.read_sql("SELECT symbol,company_name FROM stocks",conn)
 
             if not db_stocks.empty:
-                stock_list = db_stocks['symbol'].tolist()
-                selected_stock = st.selectbox("Select stock to synchronize:", stock_list)+'.NS'
 
-                btn_col1, btn_col2, _ = st.columns([1, 1, 2])
+                stock_list=db_stocks['symbol'].tolist()
+                selected_stock=st.selectbox("Select stock",stock_list)+'.NS'
 
-                # --- REAL-TIME SYNC LOGIC ---
-                if btn_col1.button("🔄 Sync & Preview Data", use_container_width=True):
-                    with st.spinner(f"Requesting data for {selected_stock}..."):
-                        # 1. Fetch Open and Previous Close using your helper
-                        stock_info = fetch_stock_data(selected_stock)
+                btn1,btn2,_=st.columns([1,1,2])
 
-                        # 2. Fetch Live Price using your helper
-                        current_price, last_time = get_live_exchange_price(selected_stock)
+                if btn1.button("🔄 Sync & Preview Data"):
+                    stock_info=fetch_stock_data(selected_stock)
+                    current_price,last_time=get_live_exchange_price(selected_stock)
 
-                        if not stock_info:
-                            st.error("❌ Could not fetch historical data. Check the ticker symbol.")
-                        elif current_price is None:
-                            st.error("❌ Could not fetch live exchange price. Market might be closed.")
-                        else:
-                            t_open = stock_info['today_open']
-                            p_close = stock_info['prev_close']
+                    if stock_info and current_price:
+                        t_open=stock_info['today_open']
+                        p_close=stock_info['prev_close']
 
-                            # 3. UPDATE DATABASE
-                            try:
-                                c.execute("""
-                                    UPDATE stocks 
-                                    SET today_open=%s, prev_close=%s 
-                                    WHERE symbol=%s
-                                """, (t_open, p_close, selected_stock.replace('.NS', ''))) # Sync symbol format
-                                conn.commit()
+                        with conn.cursor() as c:
+                            c.execute(
+                                "UPDATE stocks SET today_open=%s,prev_close=%s WHERE symbol=%s",
+                                (t_open,p_close,selected_stock.replace('.NS',''))
+                            )
+                            conn.commit()
 
-                                # 4. DISPLAY RESULTS IN STREAMLIT
-                                st.success(f"✅ Database Updated for {selected_stock}")
+                        st.success("Database Updated")
 
-                                # Metrics Row
-                                m1, m2, m3, m4 = st.columns(4)
-                                m1.metric("Today's Open", f"₹ {t_open}")
-                                m2.metric("Prev Close", f"₹ {p_close}")
-                                m3.metric("Current Price", f"₹ {current_price}", help=f"Last traded: {last_time}")
-
-                                change = t_open - p_close
-                                pct = (change / p_close) * 100
-                                m4.metric("Overnight Gap", f"{change:+.2f}", f"{pct:+.2f}%")
-
-                            except Exception as e:
-                                st.error(f"❌ Database Update Error: {str(e)}")
-
-                # --- DELETE LOGIC ---
-                if btn_col2.button("🗑️ Delete Stock", use_container_width=True):
-                    c.execute("DELETE FROM stocks WHERE symbol=%s", (selected_stock,))
-                    conn.commit()
-                    st.warning(f"Removed {selected_stock} from the database.")
+                if btn2.button("🗑️ Delete Stock"):
+                    with conn.cursor() as c:
+                        c.execute("DELETE FROM stocks WHERE symbol=%s",(selected_stock,))
+                        conn.commit()
+                    st.warning("Stock removed")
                     st.rerun()
-
             else:
                 st.info("Your database is empty. Add a stock symbol to get started.")
-    

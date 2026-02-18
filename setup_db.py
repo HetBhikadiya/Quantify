@@ -38,6 +38,7 @@ try:
                     ifsc_code VARCHAR(20),
                     balance DOUBLE DEFAULT 0.0,
                     status VARCHAR(20) DEFAULT 'ACTIVE',
+                    suspend_reason TEXT
                 )
             """)
 
