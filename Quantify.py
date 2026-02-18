@@ -191,7 +191,6 @@ def process_pending_limit_orders(conn):
             should_execute = True
         elif o_type == "STOP-LOSS" and current_price <= t_price:
             should_execute = True
-
         if should_execute:
             total_val = current_price * qty
             # Fetch Brokerage (reuse your logic)
@@ -471,11 +470,11 @@ else:
                     st.warning("📴 Live market data unavailable")
                     st.stop()
 
-                st.metric(
-                    "Live Exchange Price",
-                    f"₹ {price}",
-                    help=f"NSE • Last Updated: {time_stamp}"
-                )
+                # st.metric(
+                #     "Live Exchange Price",
+                #     f"₹ {price}",
+                #     help=f"NSE • Last Updated: {time_stamp}"
+                # )
 
                 # Metrics
                 st.metric("Live Price", f"₹ {price:,.2f}", delta=round(price - base, 2))
@@ -529,8 +528,8 @@ else:
 
                                 # Log Transaction
                                 c.execute("""
-                                    INSERT INTO transactions (email, symbol, qty, price, action, order_type) 
-                                    VALUES (%s, %s, %s, %s, 'BUY', 'MARKET')
+                                    INSERT INTO transactions (email, symbol, qty, price, action, order_type,status) 
+                                    VALUES (%s, %s, %s, %s, 'BUY', 'MARKET','COMPLETE')
                                 """, (st.session_state["user_email"], stock, qty, price))
 
                                 conn.commit()
