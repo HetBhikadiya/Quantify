@@ -1,0 +1,8 @@
+pymysql
+pandas
+matplotlib.pyplot
+plotly.graph_objects
+yfinance
+pytz
+pip install feedparser
+pip install feedparser streamlit-autorefresh

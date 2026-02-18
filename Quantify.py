@@ -1,7 +1,6 @@
 import streamlit as st
 import pymysql
 import pandas as pd
-import matplotlib.pyplot as plt
 import plotly.graph_objects as go 
 import random
 import re
@@ -9,6 +8,10 @@ import bcrypt
 import yfinance as yf
 from datetime import datetime
 import pytz
+import feedparser
+import os
+from datetime import datetime
+from streamlit_autorefresh import st_autorefresh
 
 
 # ==========================================
@@ -133,8 +136,6 @@ def sync_all_stocks(conn):
             """, (data['today_open'], data['prev_close'], data['company_name'], sym))
     conn.commit()
 
-import os
-from datetime import datetime
 
 def save_trade_to_file(email, stock, qty, price, action, order_type):
     # Folder to store logs
@@ -154,6 +155,25 @@ def save_trade_to_file(email, stock, qty, price, action, order_type):
 
     with open(file_path, "a", encoding="utf-8") as f:
         f.write(line)
+
+def fetch_nse_news(limit):
+    urls = [
+    "https://in.investing.com/rss/news_25.rss"
+    ]
+
+
+    news = []
+
+    for url in urls:
+        feed = feedparser.parse(url)
+        for e in feed.entries:
+            news.append({
+                "title": e.title,
+                "summary": e.get("summary",""),
+                "link": e.link
+            })
+
+    return news[:limit]
 
 # ==========================================
 # YFINANCE FUNCTIONS
@@ -486,7 +506,7 @@ else:
     if st.session_state["user_email"] != 'admin@quantify.com':
 
         st.sidebar.title(f"Hello, {st.session_state['user_name']}")
-        menu_options = ["Dashboard", "Live Market & Trade", "Watchlist", "Portfolio", "History", "Add Funds"]
+        menu_options = ["Dashboard", "Live Market & Trade", "Watchlist", "Portfolio", "History", "Add Funds", "News"]
 
         # Initialize menu choice in session state if it doesn't exist
         if "menu_choice" not in st.session_state or st.session_state.menu_choice not in menu_options:
@@ -695,6 +715,23 @@ else:
                     )
 
                     st.plotly_chart(fig, use_container_width=True)
+
+            st.subheader(f"📰 News for {stock}")
+            stock_name = stock.split(".")[0].lower()
+            news = fetch_nse_news(30)
+            filtered = [
+                n for n in news
+                if stock_name in n["summary"].lower()
+            ]
+            if filtered:
+                for n in filtered[:5]:
+                    st.markdown(f"**{n['title']}**")
+                    st.write(n["summary"])
+                    st.markdown(f"[Read more]({n['link']})")
+                    st.divider()
+            else:
+                st.info("No NSE news found for this stock yet.")
+
 
 
         # ==========================================
@@ -916,6 +953,17 @@ else:
                 **Note:** * Funds will reflect in your account immediately.
                 * Please do not refresh the page during transaction.
                 """)
+        
+        elif menu == "News":
+            st.header("📰 Indian NSE Market News")
+
+            news = fetch_nse_news(20)
+            
+            for n in news:
+                st.subheader(n["title"])
+                st.write(n["summary"])
+                st.markdown(f"[Read full article]({n['link']})")
+                st.divider()
 
     # ==========================================
     # ADMIN SECTION
@@ -1085,6 +1133,8 @@ else:
                         if success:
                             st.success("Stock Added/Updated")
                             st.rerun()
+                        else:
+                            st.warning("Enter Valid stock")
 
             st.divider()
 
